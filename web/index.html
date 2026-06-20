@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Security Alert Triage</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">SOC triage workspace</p>
+        <h1>Real-Time Alert Prioritization</h1>
+      </div>
+      <button id="refreshButton" type="button">Refresh</button>
+    </header>
+
+    <main>
+      <section class="metrics" aria-label="alert summary">
+        <article>
+          <span>Events</span>
+          <strong id="eventCount">0</strong>
+        </article>
+        <article>
+          <span>Open Alerts</span>
+          <strong id="alertCount">0</strong>
+        </article>
+        <article>
+          <span>Critical</span>
+          <strong id="criticalCount">0</strong>
+        </article>
+        <article>
+          <span>High</span>
+          <strong id="highCount">0</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel">
+          <h2>Live Event Intake</h2>
+          <textarea id="eventInput" spellcheck="false"></textarea>
+          <div class="actions">
+            <button id="sendEventButton" type="button">Send Event</button>
+            <button id="loadDemoButton" type="button" class="secondary">Load Demo Burst</button>
+          </div>
+          <p id="apiStatus" class="status">Ready</p>
+        </aside>
+
+        <section class="alerts">
+          <div class="section-heading">
+            <h2>Prioritized Alerts</h2>
+            <span id="lastUpdated">Not refreshed yet</span>
+          </div>
+          <div id="alertList" class="alert-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

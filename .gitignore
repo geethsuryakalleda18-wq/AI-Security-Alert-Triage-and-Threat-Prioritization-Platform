@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+findings.json
+data/demo_watch_events.jsonl
+.DS_Store
