@@ -17,6 +17,9 @@ The platform ingests JSONL events, detects suspicious activity, deduplicates rel
 - MITRE ATT&CK mapping for each alert
 - Business impact and recommended response actions
 - JSON output for reports or SIEM-style integrations
+- Optional Redis Stream intake for higher-volume event flow
+- Optional OpenSearch/Elasticsearch persistence for alert search and dashboards
+- Analyst feedback loop that can reduce or raise future alert severity
 - Safe demo dataset and unit tests
 
 ## Why This Solves a Real Company Problem
@@ -41,8 +44,11 @@ real-time-ai-security-alert-triage/
       demo.py
       detections.py
       enrichment.py
+      feedback.py
       models.py
+      persistence.py
       server.py
+      streaming.py
       triage.py
   tests/
     test_triage.py
@@ -100,6 +106,63 @@ Append a safe simulated burst from another terminal:
 PYTHONPATH=src python3 -m triage_platform.cli data/demo_watch_events.jsonl --append-demo
 ```
 
+## Analyst Feedback
+
+First run the sample alerts and copy an `alert_id` from JSON output:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli data/sample_events.jsonl --json
+```
+
+Store analyst feedback:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli --add-feedback ALERT_ID --verdict false_positive --analyst soc1 --note "Approved test activity"
+```
+
+Supported verdicts:
+
+```text
+true_positive
+false_positive
+benign
+escalated
+```
+
+Future triage runs use `data/analyst_feedback.jsonl` to adjust alert risk scores. The dashboard also includes feedback buttons on each alert card.
+
+## Redis Streaming
+
+For larger event volume, the platform can consume events from a Redis Stream. Install Redis client support first:
+
+```bash
+python3 -m pip install redis
+```
+
+Then consume events:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli --redis-url redis://localhost:6379/0 --redis-stream security-events
+```
+
+Each Redis stream message should include an `event` or `payload` field containing one JSON security event.
+
+## OpenSearch or Elasticsearch Persistence
+
+Persist alerts to a search backend:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli data/sample_events.jsonl \
+  --opensearch-url http://localhost:9200 \
+  --opensearch-index security-alerts
+```
+
+This uses the OpenSearch/Elasticsearch-compatible document API:
+
+```text
+PUT /security-alerts/_doc/{alert_id}
+```
+
 ## API
 
 Health check:
@@ -150,8 +213,6 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 ## Future Improvements
 
-- Add Kafka or Redis streaming for larger event volume
-- Add OpenSearch or Elasticsearch persistence
-- Add analyst feedback to improve severity scoring
+- Add Kafka consumer support as an alternative to Redis Streams
 - Add Slack, Teams, or email notification routing
 - Add integrations for Wazuh, Zeek, Suricata, AWS CloudTrail, and Azure AD logs

@@ -6,6 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .feedback import AnalystFeedback, FeedbackStore
 from .models import SecurityEvent
 from .triage import AlertStore, load_jsonl, triage_events
 
@@ -17,10 +18,17 @@ class TriageState:
     def __init__(self) -> None:
         self.events: list[SecurityEvent] = []
         self.alert_store = AlertStore()
+        self.feedback_store = FeedbackStore(ROOT / "data" / "analyst_feedback.jsonl")
 
     def add_events(self, events: list[SecurityEvent]) -> None:
         self.events.extend(events)
-        self.alert_store.upsert_many(triage_events(events))
+        self.alert_store.upsert_many(triage_events(events, feedback_items=self.feedback_store.load()))
+
+    def add_feedback(self, feedback: AnalystFeedback) -> None:
+        self.feedback_store.append(feedback)
+        alerts = triage_events(self.events, feedback_items=self.feedback_store.load())
+        self.alert_store.clear()
+        self.alert_store.upsert_many(alerts)
 
     def load_file(self, path: Path) -> None:
         self.add_events(load_jsonl(path))
@@ -60,10 +68,15 @@ class TriageRequestHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path != "/api/events":
-            self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
+        if parsed.path == "/api/events":
+            self._handle_events()
             return
+        if parsed.path == "/api/feedback":
+            self._handle_feedback()
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
 
+    def _handle_events(self) -> None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -76,6 +89,20 @@ class TriageRequestHandler(SimpleHTTPRequestHandler):
         STATE.add_events(events)
         self._send_json(STATE.dashboard(), status=HTTPStatus.CREATED)
 
+    def _handle_feedback(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            feedback = AnalystFeedback.from_dict(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not feedback.alert_id:
+            self._send_json({"error": "alert_id is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        STATE.add_feedback(feedback)
+        self._send_json(STATE.dashboard(), status=HTTPStatus.CREATED)
+
     def _send_json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, indent=2).encode("utf-8")
         self.send_response(status)
@@ -85,7 +112,14 @@ class TriageRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8080, seed_path: Path | None = None) -> None:
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    seed_path: Path | None = None,
+    feedback_path: Path | None = None,
+) -> None:
+    if feedback_path:
+        STATE.feedback_store = FeedbackStore(feedback_path)
     if seed_path:
         STATE.load_file(seed_path)
     server = ThreadingHTTPServer((host, port), TriageRequestHandler)

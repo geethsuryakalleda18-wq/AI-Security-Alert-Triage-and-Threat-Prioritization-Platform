@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from triage_platform.feedback import AnalystFeedback
 from triage_platform.models import SecurityEvent
 from triage_platform.triage import triage_events
 
@@ -76,6 +77,37 @@ class TriagePipelineTests(unittest.TestCase):
         self.assertEqual(1, len(alerts))
         self.assertEqual("network", alerts[0].category)
         self.assertIn("T1046 - Network Service Discovery", alerts[0].mitre_techniques)
+
+    def test_feedback_reduces_false_positive_risk(self) -> None:
+        events = [
+            SecurityEvent.from_dict(
+                {
+                    "timestamp": f"2026-06-20T12:00:0{index}+00:00",
+                    "source": "vpn",
+                    "event_type": "authentication",
+                    "action": "login",
+                    "outcome": "failure",
+                    "source_ip": "198.51.100.23",
+                    "username": "admin",
+                    "asset": "vpn-gateway",
+                }
+            )
+            for index in range(6)
+        ]
+        original = triage_events(events)[0]
+        feedback = AnalystFeedback.from_dict(
+            {
+                "alert_id": original.alert_id,
+                "verdict": "false_positive",
+                "analyst": "soc1",
+                "note": "Approved test activity",
+            }
+        )
+
+        adjusted = triage_events(events, feedback_items=[feedback])[0]
+
+        self.assertLess(adjusted.risk_score, original.risk_score)
+        self.assertIn("false_positive", adjusted.entities["feedback_verdicts"])
 
 
 if __name__ == "__main__":

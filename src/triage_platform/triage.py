@@ -12,6 +12,7 @@ from .detections import (
     detect_suspicious_dns,
     detect_suspicious_process,
 )
+from .feedback import AnalystFeedback, apply_feedback
 from .models import Alert, SecurityEvent
 
 DETECTION_PIPELINE = (
@@ -67,12 +68,18 @@ def dump_jsonl(path: str | Path, rows: Iterable[dict]) -> None:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def triage_events(events: list[SecurityEvent]) -> list[Alert]:
+def triage_events(
+    events: list[SecurityEvent],
+    feedback_items: list[AnalystFeedback] | None = None,
+) -> list[Alert]:
     alerts: list[Alert] = []
     for detector in DETECTION_PIPELINE:
         alerts.extend(detector(events))
     store = AlertStore()
-    return store.upsert_many(alerts)
+    prioritized = store.upsert_many(alerts)
+    if feedback_items:
+        prioritized = apply_feedback(prioritized, feedback_items)
+    return prioritized
 
 
 def explain_alert(alert: Alert) -> str:

@@ -1,2 +1,5 @@
 # No third-party packages are required for the core project.
 # Python 3.10+ is recommended.
+#
+# Optional integration:
+# redis>=5.0.0  # only needed for --redis-url streaming intake

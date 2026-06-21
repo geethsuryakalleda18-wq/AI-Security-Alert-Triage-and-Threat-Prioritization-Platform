@@ -98,6 +98,9 @@ function renderDashboard(data) {
 function renderAlert(alert) {
   const evidence = alert.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
   const mitre = alert.mitre_techniques.map(escapeHtml).join(", ");
+  const feedback = alert.entities.feedback_verdicts
+    ? `<p><strong>Feedback:</strong> ${alert.entities.feedback_verdicts.map(escapeHtml).join(", ")}</p>`
+    : "";
   return `
     <article class="alert-card">
       <div class="alert-top">
@@ -111,9 +114,37 @@ function renderAlert(alert) {
       <p><strong>Business impact:</strong> ${escapeHtml(alert.business_impact)}</p>
       <p><strong>Recommended action:</strong> ${escapeHtml(alert.recommendation)}</p>
       <p><strong>MITRE:</strong> ${mitre}</p>
+      ${feedback}
       <ul class="evidence">${evidence}</ul>
+      <div class="feedback-actions" aria-label="analyst feedback">
+        <button type="button" onclick="sendFeedback('${alert.alert_id}', 'true_positive')">True Positive</button>
+        <button type="button" onclick="sendFeedback('${alert.alert_id}', 'escalated')">Escalate</button>
+        <button type="button" class="warning" onclick="sendFeedback('${alert.alert_id}', 'false_positive')">False Positive</button>
+        <button type="button" class="warning" onclick="sendFeedback('${alert.alert_id}', 'benign')">Benign</button>
+      </div>
     </article>
   `;
+}
+
+async function sendFeedback(alertId, verdict) {
+  statusText.textContent = `Saving ${verdict.replaceAll("_", " ")} feedback`;
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      alert_id: alertId,
+      verdict,
+      analyst: "dashboard",
+      note: "Dashboard feedback"
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    statusText.textContent = data.error || "Feedback request failed";
+    return;
+  }
+  renderDashboard(data);
+  statusText.textContent = "Feedback saved";
 }
 
 function escapeHtml(value) {

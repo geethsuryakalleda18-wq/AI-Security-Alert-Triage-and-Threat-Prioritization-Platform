@@ -141,6 +141,25 @@ textarea {
   margin-top: 12px;
 }
 
+.feedback-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.feedback-actions button {
+  min-height: 32px;
+  background: #eef4f3;
+  color: #134e4a;
+  padding: 0 10px;
+}
+
+.feedback-actions button.warning {
+  background: #fff4ed;
+  color: #9a3412;
+}
+
 .status {
   margin: 12px 0 0;
 }
