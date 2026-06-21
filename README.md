@@ -18,7 +18,10 @@ The platform ingests JSONL events, detects suspicious activity, deduplicates rel
 - Business impact and recommended response actions
 - JSON output for reports or SIEM-style integrations
 - Optional Redis Stream intake for higher-volume event flow
+- Optional Kafka topic intake for higher-volume event flow
 - Optional OpenSearch/Elasticsearch persistence for alert search and dashboards
+- Optional Slack, Microsoft Teams, and email alert notifications
+- Vendor log normalization for Wazuh, Zeek, Suricata, AWS CloudTrail, and Azure AD
 - Analyst feedback loop that can reduce or raise future alert severity
 - Safe demo dataset and unit tests
 
@@ -45,7 +48,9 @@ real-time-ai-security-alert-triage/
       detections.py
       enrichment.py
       feedback.py
+      integrations.py
       models.py
+      notifications.py
       persistence.py
       server.py
       streaming.py
@@ -147,6 +152,25 @@ PYTHONPATH=src python3 -m triage_platform.cli --redis-url redis://localhost:6379
 
 Each Redis stream message should include an `event` or `payload` field containing one JSON security event.
 
+## Kafka Streaming
+
+For Kafka-backed event pipelines, install Kafka client support first:
+
+```bash
+python3 -m pip install kafka-python
+```
+
+Then consume events from a topic:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli \
+  --kafka-bootstrap localhost:9092 \
+  --kafka-topic security-events \
+  --kafka-group triage-platform
+```
+
+Each Kafka message value should be one JSON security event.
+
 ## OpenSearch or Elasticsearch Persistence
 
 Persist alerts to a search backend:
@@ -161,6 +185,56 @@ This uses the OpenSearch/Elasticsearch-compatible document API:
 
 ```text
 PUT /security-alerts/_doc/{alert_id}
+```
+
+## Alert Notifications
+
+Send alert notifications to Slack:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli data/sample_events.jsonl \
+  --slack-webhook-url https://hooks.slack.com/services/EXAMPLE
+```
+
+Send alert notifications to Microsoft Teams:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli data/sample_events.jsonl \
+  --teams-webhook-url https://example.webhook.office.com/webhookb2/EXAMPLE
+```
+
+Send alert notifications by email:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli data/sample_events.jsonl \
+  --smtp-host smtp.example.com \
+  --smtp-port 587 \
+  --smtp-user analyst@example.com \
+  --smtp-password APP_PASSWORD \
+  --email-from analyst@example.com \
+  --email-to soc@example.com
+```
+
+## Vendor Log Integrations
+
+Normalize logs from common security tools before triage:
+
+```bash
+PYTHONPATH=src python3 -m triage_platform.cli wazuh_events.jsonl --integration-source wazuh
+PYTHONPATH=src python3 -m triage_platform.cli zeek_conn.jsonl --integration-source zeek
+PYTHONPATH=src python3 -m triage_platform.cli suricata_eve.jsonl --integration-source suricata
+PYTHONPATH=src python3 -m triage_platform.cli cloudtrail.jsonl --integration-source cloudtrail
+PYTHONPATH=src python3 -m triage_platform.cli azure_ad_signins.jsonl --integration-source azure-ad
+```
+
+Supported integration sources:
+
+```text
+wazuh
+zeek
+suricata
+cloudtrail
+azure-ad
 ```
 
 ## API
@@ -211,8 +285,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 - Dashboard-based incident prioritization
 - Incident response documentation
 
-## Future Improvements
+## Production Hardening Ideas
 
-- Add Kafka consumer support as an alternative to Redis Streams
-- Add Slack, Teams, or email notification routing
-- Add integrations for Wazuh, Zeek, Suricata, AWS CloudTrail, and Azure AD logs
+- Add authentication and role-based access control for the dashboard
+- Add deployment templates for Docker Compose or Kubernetes
+- Add retention policies for long-term alert storage

@@ -7,9 +7,11 @@ from pathlib import Path
 
 from .demo import demo_events
 from .feedback import AnalystFeedback, FeedbackStore
+from .integrations import normalize_vendor_event
 from .models import SecurityEvent
+from .notifications import EmailNotifier, WebhookNotifier
 from .persistence import SearchPersistence
-from .streaming import RedisStreamConfig, consume_redis_stream
+from .streaming import KafkaConfig, RedisStreamConfig, consume_kafka_topic, consume_redis_stream
 from .triage import AlertStore, dump_jsonl, explain_alert, load_jsonl, triage_events
 
 
@@ -34,6 +36,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--opensearch-index", default="security-alerts", help="Search index for persisted alerts")
     parser.add_argument("--redis-url", help="Redis URL for streaming intake, such as redis://localhost:6379/0")
     parser.add_argument("--redis-stream", default="security-events", help="Redis stream name for event intake")
+    parser.add_argument("--kafka-bootstrap", help="Kafka bootstrap servers, such as localhost:9092")
+    parser.add_argument("--kafka-topic", default="security-events", help="Kafka topic for event intake")
+    parser.add_argument("--kafka-group", default="triage-platform", help="Kafka consumer group ID")
+    parser.add_argument(
+        "--integration-source",
+        choices=["wazuh", "zeek", "suricata", "cloudtrail", "azure-ad"],
+        help="Normalize vendor JSONL events before triage",
+    )
+    parser.add_argument("--slack-webhook-url", help="Slack incoming webhook URL for alert notifications")
+    parser.add_argument("--teams-webhook-url", help="Microsoft Teams incoming webhook URL for alert notifications")
+    parser.add_argument("--smtp-host", help="SMTP host for email alert notifications")
+    parser.add_argument("--smtp-port", type=int, default=587, help="SMTP port for email alert notifications")
+    parser.add_argument("--smtp-user", default="", help="SMTP username")
+    parser.add_argument("--smtp-password", default="", help="SMTP password or app password")
+    parser.add_argument("--email-from", help="Sender email address for alert notifications")
+    parser.add_argument("--email-to", help="Comma-separated recipient email addresses")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     return parser
@@ -81,7 +99,10 @@ def main() -> None:
         if args.redis_url:
             consume_redis(args)
             return
-        raise SystemExit("Provide a JSONL event file, --redis-url, or use --serve/--init-demo.")
+        if args.kafka_bootstrap:
+            consume_kafka(args)
+            return
+        raise SystemExit("Provide a JSONL event file, --redis-url, --kafka-bootstrap, or use --serve/--init-demo.")
 
     if args.watch:
         watch_file(
@@ -89,12 +110,16 @@ def main() -> None:
             as_json=args.json,
             feedback_store=FeedbackStore(args.feedback_file),
             search=build_search(args),
+            notifiers=build_notifiers(args),
+            integration_source=args.integration_source,
         )
         return
 
     feedback_items = FeedbackStore(args.feedback_file).load()
-    alerts = triage_events(load_jsonl(args.path), feedback_items=feedback_items)
+    events = load_events(args.path, args.integration_source)
+    alerts = triage_events(events, feedback_items=feedback_items)
     persist_alerts(alerts, build_search(args))
+    notify_alerts(alerts, build_notifiers(args))
     print_alerts(alerts, as_json=args.json)
 
 
@@ -115,19 +140,22 @@ def watch_file(
     as_json: bool = False,
     feedback_store: FeedbackStore | None = None,
     search: SearchPersistence | None = None,
+    notifiers=None,
+    integration_source: str | None = None,
 ) -> None:
     path.touch(exist_ok=True)
     store = AlertStore()
     seen = 0
     print(f"Watching {path} for new security events. Press Ctrl+C to stop.")
     while True:
-        events = load_jsonl(path)
+        events = load_events(path, integration_source)
         new_events = events[seen:]
         seen = len(events)
         if new_events:
             feedback_items = feedback_store.load() if feedback_store else []
             alerts = store.upsert_many(triage_events(new_events, feedback_items=feedback_items))
             persist_alerts(alerts, search)
+            notify_alerts(alerts, notifiers or [])
             print_alerts(alerts, as_json=as_json)
         time.sleep(2)
 
@@ -136,11 +164,31 @@ def consume_redis(args) -> None:
     store = AlertStore()
     feedback_store = FeedbackStore(args.feedback_file)
     search = build_search(args)
+    notifiers = build_notifiers(args)
     config = RedisStreamConfig(url=args.redis_url, stream=args.redis_stream)
     print(f"Consuming Redis stream {config.stream} from {config.url}. Press Ctrl+C to stop.")
     for events in consume_redis_stream(config):
         alerts = store.upsert_many(triage_events(events, feedback_items=feedback_store.load()))
         persist_alerts(alerts, search)
+        notify_alerts(alerts, notifiers)
+        print_alerts(alerts, as_json=args.json)
+
+
+def consume_kafka(args) -> None:
+    store = AlertStore()
+    feedback_store = FeedbackStore(args.feedback_file)
+    search = build_search(args)
+    notifiers = build_notifiers(args)
+    config = KafkaConfig(
+        bootstrap_servers=args.kafka_bootstrap,
+        topic=args.kafka_topic,
+        group_id=args.kafka_group,
+    )
+    print(f"Consuming Kafka topic {config.topic} from {config.bootstrap_servers}. Press Ctrl+C to stop.")
+    for events in consume_kafka_topic(config):
+        alerts = store.upsert_many(triage_events(events, feedback_items=feedback_store.load()))
+        persist_alerts(alerts, search)
+        notify_alerts(alerts, notifiers)
         print_alerts(alerts, as_json=args.json)
 
 
@@ -155,6 +203,48 @@ def persist_alerts(alerts, search: SearchPersistence | None) -> None:
         return
     count = search.index_alerts(alerts)
     print(f"Persisted {count} alerts to {search.base_url.rstrip('/')}/{search.index}")
+
+
+def load_events(path: str | Path, integration_source: str | None = None) -> list[SecurityEvent]:
+    if not integration_source:
+        return load_jsonl(path)
+    raw_events = []
+    with Path(path).open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw_events.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON on line {line_number}: {exc}") from exc
+    return [normalize_vendor_event(integration_source, row) for row in raw_events]
+
+
+def build_notifiers(args):
+    notifiers = []
+    if args.slack_webhook_url:
+        notifiers.append(WebhookNotifier(args.slack_webhook_url, "slack"))
+    if args.teams_webhook_url:
+        notifiers.append(WebhookNotifier(args.teams_webhook_url, "teams"))
+    if args.smtp_host and args.email_from and args.email_to:
+        notifiers.append(
+            EmailNotifier(
+                smtp_host=args.smtp_host,
+                smtp_port=args.smtp_port,
+                sender=args.email_from,
+                recipients=[item.strip() for item in args.email_to.split(",") if item.strip()],
+                username=args.smtp_user,
+                password=args.smtp_password,
+            )
+        )
+    return notifiers
+
+
+def notify_alerts(alerts, notifiers) -> None:
+    for notifier in notifiers:
+        count = notifier.send_alerts(alerts)
+        print(f"Sent {count} alerts with {notifier.__class__.__name__}")
 
 
 if __name__ == "__main__":

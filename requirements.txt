@@ -3,3 +3,4 @@
 #
 # Optional integration:
 # redis>=5.0.0  # only needed for --redis-url streaming intake
+# kafka-python>=2.0.2  # only needed for --kafka-bootstrap streaming intake
